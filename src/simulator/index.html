@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Offline Sync Simulator — Multi-Device Conflict Testing</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#07070d;--card:rgba(14,14,28,0.9);--border:rgba(255,255,255,0.07);--text:#f0f0f8;--text2:rgba(240,240,248,0.55);--accent:#818cf8;--accent2:#22d3ee;--green:#34d399;--red:#f87171;--yellow:#fbbf24;--radius:12px;--font:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',monospace}
+body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.5;min-height:100vh}
+body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 20% 20%,rgba(129,140,248,0.06) 0%,transparent 50%),radial-gradient(ellipse at 80% 80%,rgba(34,211,238,0.04) 0%,transparent 50%);pointer-events:none}
+.header{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;border-bottom:1px solid var(--border);backdrop-filter:blur(20px);position:relative;z-index:10}
+.header h1{font-size:1.25rem;font-weight:700;background:linear-gradient(135deg,#818cf8,#22d3ee);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header p{font-size:.75rem;color:var(--text2)}
+.setup{max-width:600px;margin:40px auto;padding:0 24px;text-align:center;position:relative;z-index:1}
+.setup h2{font-size:1.125rem;font-weight:600;margin-bottom:16px}
+.setup-form{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;backdrop-filter:blur(16px)}
+.field{margin-bottom:14px;text-align:left}
+.field label{display:block;font-size:.8125rem;font-weight:500;color:var(--text2);margin-bottom:6px}
+.field input,.field textarea{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.04);color:var(--text);font-family:var(--font);font-size:.875rem;outline:none}
+.field input:focus,.field textarea:focus{border-color:rgba(129,140,248,0.5);box-shadow:0 0 0 3px rgba(129,140,248,0.15)}
+.field textarea{min-height:80px;font-family:var(--mono);font-size:.8125rem}
+.btn{padding:10px 20px;border:none;border-radius:8px;font-family:var(--font);font-weight:600;font-size:.875rem;cursor:pointer;transition:all .2s}
+.btn-primary{background:linear-gradient(135deg,#818cf8,#22d3ee);color:#fff}
+.btn-primary:hover{box-shadow:0 4px 16px rgba(129,140,248,0.3);transform:translateY(-1px)}
+.btn-sm{padding:7px 14px;font-size:.75rem}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent)}
+.btn-danger{background:rgba(248,113,113,0.15);border:1px solid rgba(248,113,113,0.3);color:var(--red)}
+.btn-success{background:rgba(52,211,153,0.15);border:1px solid rgba(52,211,153,0.3);color:var(--green)}
+.sim{display:none;padding:24px;max-width:1400px;margin:0 auto;position:relative;z-index:1}
+.sim.active{display:block}
+.sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px}
+.device{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(16px)}
+.device-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+.device-name{font-weight:600;font-size:.875rem;display:flex;align-items:center;gap:8px}
+.device-name .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.device-name .dot.online{background:var(--green);box-shadow:0 0 6px var(--green)}
+.device-name .dot.offline{background:var(--red);box-shadow:0 0 6px var(--red)}
+.device-status{font-size:.6875rem;font-family:var(--mono);padding:3px 10px;border-radius:999px;font-weight:500}
+.device-status.online{background:rgba(52,211,153,0.1);color:var(--green)}
+.device-status.offline{background:rgba(248,113,113,0.1);color:var(--red)}
+.device-body{padding:18px}
+.device-fields{margin-bottom:14px}
+.device-field{margin-bottom:10px}
+.device-field label{display:block;font-size:.75rem;font-weight:500;color:var(--text2);margin-bottom:4px}
+.device-field input{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,0.04);color:var(--text);font-family:var(--font);font-size:.8125rem;outline:none}
+.device-field input:focus{border-color:rgba(129,140,248,0.5)}
+.device-field input:disabled{opacity:.5;cursor:not-allowed}
+.device-actions{display:flex;gap:8px;flex-wrap:wrap}
+.device-info{margin-top:14px;padding:12px;background:rgba(255,255,255,0.02);border-radius:8px;border:1px solid var(--border)}
+.device-info-row{display:flex;justify-content:space-between;font-size:.6875rem;padding:3px 0}
+.device-info-row .label{color:var(--text2)}
+.device-info-row .value{font-family:var(--mono);color:var(--accent)}
+.log-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;backdrop-filter:blur(16px)}
+.log-header{padding:14px 18px;border-bottom:1px solid var(--border);font-weight:600;font-size:.875rem;display:flex;align-items:center;justify-content:space-between}
+.log-body{max-height:400px;overflow-y:auto;padding:8px}
+.log-body::-webkit-scrollbar{width:4px}
+.log-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+.log-entry{padding:8px 12px;margin:4px 0;border-radius:8px;font-size:.75rem;line-height:1.5;border-left:3px solid transparent;background:rgba(255,255,255,0.02)}
+.log-entry.accepted{border-color:var(--green);background:rgba(52,211,153,0.05)}
+.log-entry.merged{border-color:var(--accent2);background:rgba(34,211,238,0.05)}
+.log-entry.conflict{border-color:var(--red);background:rgba(248,113,113,0.05)}
+.log-entry.info{border-color:var(--accent);background:rgba(129,140,248,0.05)}
+.log-entry.warn{border-color:var(--yellow);background:rgba(251,191,36,0.05)}
+.log-time{font-family:var(--mono);color:var(--text2);font-size:.625rem}
+.log-status{font-weight:600;margin:2px 0}
+.log-detail{color:var(--text2);font-size:.6875rem}
+.server-state{margin-top:24px}
+.server-state h3{font-size:.875rem;font-weight:600;margin-bottom:12px;color:var(--text2)}
+.server-data{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;font-family:var(--mono);font-size:.8125rem;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto}
+@media(max-width:768px){.sim-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>Offline Sync Simulator</h1>
+    <p>Interactive Multi-Device Conflict Testing Dashboard</p>
+  </div>
+</div>
+
+<div class="setup" id="setup">
+  <h2>Create a Document to Simulate</h2>
+  <div class="setup-form">
+    <div class="field">
+      <label>Initial Document Data (JSON)</label>
+      <textarea id="init-data">{"title": "Project Roadmap", "status": "draft", "content": "Initial content here", "priority": "medium"}</textarea>
+    </div>
+    <button class="btn btn-primary" onclick="startSimulation()">Launch Simulator</button>
+  </div>
+</div>
+
+<div class="sim" id="sim">
+  <div class="sim-grid">
+    <div class="device" id="device-a">
+      <div class="device-header">
+        <span class="device-name"><span class="dot online" id="dot-a"></span> Device A — Phone</span>
+        <span class="device-status online" id="status-a">Online</span>
+      </div>
+      <div class="device-body">
+        <div class="device-fields" id="fields-a"></div>
+        <div class="device-actions">
+          <button class="btn btn-sm btn-outline" onclick="toggleOnline('a')">Toggle Offline</button>
+          <button class="btn btn-sm btn-success" onclick="syncDevice('a')">Sync to Server</button>
+        </div>
+        <div class="device-info" id="info-a"></div>
+      </div>
+    </div>
+    <div class="device" id="device-b">
+      <div class="device-header">
+        <span class="device-name"><span class="dot online" id="dot-b"></span> Device B — Laptop</span>
+        <span class="device-status online" id="status-b">Online</span>
+      </div>
+      <div class="device-body">
+        <div class="device-fields" id="fields-b"></div>
+        <div class="device-actions">
+          <button class="btn btn-sm btn-outline" onclick="toggleOnline('b')">Toggle Offline</button>
+          <button class="btn btn-sm btn-success" onclick="syncDevice('b')">Sync to Server</button>
+        </div>
+        <div class="device-info" id="info-b"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="log-panel">
+    <div class="log-header">
+      <span>Sync Event Log</span>
+      <button class="btn btn-sm btn-outline" onclick="clearLog()">Clear</button>
+    </div>
+    <div class="log-body" id="log-body"></div>
+  </div>
+
+  <div class="server-state">
+    <h3>Server Document State</h3>
+    <div class="server-data" id="server-data">No document created yet.</div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let docId = null;
+let devices = {
+  a: { id: 'device-phone', name: 'Phone', online: true, data: {}, version: 0, clock: {} },
+  b: { id: 'device-laptop', name: 'Laptop', online: true, data: {}, version: 0, clock: {} }
+};
+
+async function startSimulation() {
+  const raw = document.getElementById('init-data').value;
+  let data;
+  try { data = JSON.parse(raw); } catch { alert('Invalid JSON'); return; }
+
+  const res = await fetch(`${API}/api/v1/documents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data, deviceId: 'device-phone', deviceName: 'Phone' })
+  });
+  const result = await res.json();
+  docId = result.documentId;
+
+  devices.a.data = { ...data };
+  devices.a.version = result.version;
+  devices.a.clock = { ...result.clock };
+  devices.b.data = { ...data };
+  devices.b.version = result.version;
+  devices.b.clock = { ...result.clock };
+
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('sim').classList.add('active');
+  renderDevice('a');
+  renderDevice('b');
+  renderDeviceInfo('a');
+  renderDeviceInfo('b');
+  updateServerState();
+  addLog('info', 'INITIALIZED', `Document created: ${docId.substring(0, 8)}...`, 'Both devices synced with initial data.');
+}
+
+function renderDevice(d) {
+  const container = document.getElementById(`fields-${d}`);
+  container.innerHTML = '';
+  for (const [key, val] of Object.entries(devices[d].data)) {
+    const div = document.createElement('div');
+    div.className = 'device-field';
+    div.innerHTML = `<label>${key}</label><input value="${String(val)}" data-device="${d}" data-field="${key}" ${!devices[d].online ? '' : ''} oninput="updateField('${d}','${key}',this.value)"/>`;
+    container.appendChild(div);
+  }
+}
+
+function renderDeviceInfo(d) {
+  const dev = devices[d];
+  const container = document.getElementById(`info-${d}`);
+  const clockStr = Object.entries(dev.clock).map(([k,v]) => `${k}:${v}`).join(', ') || 'empty';
+  container.innerHTML = `
+    <div class="device-info-row"><span class="label">Version</span><span class="value">v${dev.version}</span></div>
+    <div class="device-info-row"><span class="label">Vector Clock</span><span class="value">{${clockStr}}</span></div>
+    <div class="device-info-row"><span class="label">Device ID</span><span class="value">${dev.id}</span></div>
+  `;
+}
+
+function updateField(d, field, value) {
+  devices[d].data[field] = value;
+}
+
+function toggleOnline(d) {
+  devices[d].online = !devices[d].online;
+  const dotEl = document.getElementById(`dot-${d}`);
+  const statusEl = document.getElementById(`status-${d}`);
+  if (devices[d].online) {
+    dotEl.className = 'dot online';
+    statusEl.className = 'device-status online';
+    statusEl.textContent = 'Online';
+    addLog('info', 'RECONNECTED', `${devices[d].name} is back online.`, 'Device can now sync changes to server.');
+  } else {
+    dotEl.className = 'dot offline';
+    statusEl.className = 'device-status offline';
+    statusEl.textContent = 'Offline';
+    addLog('warn', 'DISCONNECTED', `${devices[d].name} went offline.`, 'Changes will be queued locally.');
+  }
+}
+
+async function syncDevice(d) {
+  const dev = devices[d];
+  if (!dev.online) {
+    addLog('warn', 'SYNC BLOCKED', `${dev.name} is offline.`, 'Cannot sync while disconnected. Toggle online first.');
+    return;
+  }
+
+  const mutationId = crypto.randomUUID();
+  const res = await fetch(`${API}/api/v1/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      documentId: docId,
+      deviceId: dev.id,
+      deviceName: dev.name,
+      mutationId,
+      baseVersion: dev.version,
+      baseClock: dev.clock,
+      data: dev.data,
+      conflictResolution: 'lww'
+    })
+  });
+  const result = await res.json();
+
+  const logClass = result.status === 'ACCEPTED' ? 'accepted' :
+                   result.status === 'AUTO_MERGED' ? 'merged' :
+                   result.status.includes('CONFLICT') ? 'conflict' : 'info';
+
+  addLog(logClass, result.status, result.message,
+    result.mergedFields ? `Auto-merged: [${result.mergedFields.join(', ')}]` :
+    result.conflicts ? `Conflicts: [${result.conflicts.map(c => c.field).join(', ')}]` : '');
+
+  dev.version = result.version;
+  dev.clock = { ...result.clock };
+  dev.data = { ...result.data };
+  renderDevice(d);
+  renderDeviceInfo(d);
+  updateServerState();
+}
+
+async function updateServerState() {
+  if (!docId) return;
+  const res = await fetch(`${API}/api/v1/documents/${docId}`);
+  const doc = await res.json();
+  document.getElementById('server-data').textContent = JSON.stringify(doc, null, 2);
+}
+
+function addLog(cls, status, message, detail) {
+  const body = document.getElementById('log-body');
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${cls}`;
+  entry.innerHTML = `
+    <div class="log-time">${new Date().toLocaleTimeString()}</div>
+    <div class="log-status">${status}</div>
+    <div class="log-detail">${message}</div>
+    ${detail ? `<div class="log-detail">${detail}</div>` : ''}
+  `;
+  body.prepend(entry);
+}
+
+function clearLog() {
+  document.getElementById('log-body').innerHTML = '';
+}
+</script>
+</body>
+</html>
