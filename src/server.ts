@@ -34,13 +34,26 @@ app.get('/api/openapi.json', (_req, res) => {
   res.json(getOpenAPISpec());
 });
 
-app.get('/simulator', (_req, res) => {
-  try {
-    const html = readFileSync(join(__dirname, 'simulator', 'index.html'), 'utf-8');
-    res.type('html').send(html);
-  } catch {
-    res.type('html').send(getSimulatorHTML());
+let simulatorCache: string | null = null;
+
+function loadSimulatorHTML(): string {
+  if (simulatorCache) return simulatorCache;
+  const paths = [
+    join(__dirname, 'simulator', 'index.html'),
+    join(__dirname, '..', 'src', 'simulator', 'index.html'),
+    join(process.cwd(), 'src', 'simulator', 'index.html'),
+  ];
+  for (const p of paths) {
+    try {
+      simulatorCache = readFileSync(p, 'utf-8');
+      return simulatorCache;
+    } catch {}
   }
+  return getSimulatorHTML();
+}
+
+app.get('/simulator', (_req, res) => {
+  res.type('html').send(loadSimulatorHTML());
 });
 
 app.get('/', (_req, res) => {
@@ -65,11 +78,13 @@ app.get('/', (_req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Offline Sync Engine running on http://localhost:${PORT}`);
-  console.log(`API Docs: http://localhost:${PORT}/docs`);
-  console.log(`Simulator: http://localhost:${PORT}/simulator`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Offline Sync Engine running on http://localhost:${PORT}`);
+    console.log(`API Docs: http://localhost:${PORT}/docs`);
+    console.log(`Simulator: http://localhost:${PORT}/simulator`);
+  });
+}
 
 function getOpenAPISpec() {
   return {
