@@ -53,10 +53,11 @@ router.post('/documents', (req: Request, res: Response) => {
 });
 
 router.get('/documents/:id', (req: Request, res: Response) => {
-  const doc = getDocument(req.params.id);
+  const id = req.params.id as string;
+  const doc = getDocument(id);
 
   if (!doc || doc.deleted) {
-    res.status(404).json({ error: `Document '${req.params.id}' not found.` });
+    res.status(404).json({ error: `Document '${id}' not found.` });
     return;
   }
 
@@ -72,10 +73,11 @@ router.get('/documents/:id', (req: Request, res: Response) => {
 });
 
 router.delete('/documents/:id', async (req: Request, res: Response) => {
-  const deleted = await deleteDocument(req.params.id);
+  const id = req.params.id as string;
+  const deleted = await deleteDocument(id);
 
   if (!deleted) {
-    res.status(404).json({ error: `Document '${req.params.id}' not found.` });
+    res.status(404).json({ error: `Document '${id}' not found.` });
     return;
   }
 
@@ -111,16 +113,17 @@ router.post('/sync', async (req: Request, res: Response) => {
 });
 
 router.get('/documents/:id/history', (req: Request, res: Response) => {
-  const doc = getDocument(req.params.id);
+  const id = req.params.id as string;
+  const doc = getDocument(id);
 
   if (!doc) {
-    res.status(404).json({ error: `Document '${req.params.id}' not found.` });
+    res.status(404).json({ error: `Document '${id}' not found.` });
     return;
   }
 
-  const history = getDocumentHistory(req.params.id);
+  const history = getDocumentHistory(id);
   res.json({
-    documentId: req.params.id,
+    documentId: id,
     currentVersion: doc.version,
     revisions: history.map(r => ({
       version: r.version,
@@ -135,22 +138,23 @@ router.get('/documents/:id/history', (req: Request, res: Response) => {
 });
 
 router.get('/documents/:id/revisions/:version', (req: Request, res: Response) => {
-  const version = parseInt(req.params.version, 10);
+  const id = req.params.id as string;
+  const version = parseInt(req.params.version as string, 10);
 
   if (isNaN(version)) {
     res.status(400).json({ error: 'Version must be a number.' });
     return;
   }
 
-  const revision = getDocumentRevision(req.params.id, version);
+  const revision = getDocumentRevision(id, version);
 
   if (!revision) {
-    res.status(404).json({ error: `Revision ${version} not found for document '${req.params.id}'.` });
+    res.status(404).json({ error: `Revision ${version} not found for document '${id}'.` });
     return;
   }
 
   res.json({
-    documentId: req.params.id,
+    documentId: id,
     revision: {
       version: revision.version,
       clock: revision.clock,
@@ -165,7 +169,8 @@ router.get('/documents/:id/revisions/:version', (req: Request, res: Response) =>
 });
 
 router.post('/documents/:id/restore/:version', async (req: Request, res: Response) => {
-  const version = parseInt(req.params.version, 10);
+  const id = req.params.id as string;
+  const version = parseInt(req.params.version as string, 10);
 
   if (isNaN(version)) {
     res.status(400).json({ error: 'Version must be a number.' });
@@ -173,7 +178,7 @@ router.post('/documents/:id/restore/:version', async (req: Request, res: Respons
   }
 
   const result = await restoreDocument(
-    req.params.id,
+    id,
     version,
     req.body.deviceId || 'server',
     req.body.deviceName || 'API Restore'
