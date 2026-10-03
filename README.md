@@ -1,219 +1,123 @@
 # Offline Sync Engine
 
-A distributed synchronization backend that handles concurrent modifications from multiple devices using **Vector Clocks** for causal ordering and **Git-style 3-way field-level merging** for intelligent conflict resolution.
+A backend service that handles concurrent document edits from multiple devices. When two devices modify the same document while one is offline, this engine figures out which changes can be merged automatically and which ones actually conflict. Built for the GDG on Campus SRM Backend Technical Task.
 
-![Node.js](https://img.shields.io/badge/Node.js-22-green) ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue) ![Express](https://img.shields.io/badge/Express-4.21-lightgrey) ![Tests](https://img.shields.io/badge/Tests-38%20passed-brightgreen)
+## The problem
 
-## Live Demo
+Imagine you edit a shared note on your phone during a flight, and your colleague edits the same note on their laptop at the same time. When both devices reconnect, the server receives two different versions of the same document. Simply picking the "latest" one means losing someone's work. This engine solves that.
 
-**[→ API Root](https://offline-sync-engine.vercel.app)** | **[→ Swagger Docs](https://offline-sync-engine.vercel.app/docs)** | **[→ Interactive Simulator](https://offline-sync-engine.vercel.app/simulator)**
+## How it works
 
-## Problem Statement
+### Vector Clocks for causality
 
-People use applications across multiple devices. A user may edit a document on their phone while offline, make different edits on their laptop, and later connect both. What happens when the server receives changes from different versions of the same data?
-
-This engine provides clear, consistent, and predictable rules for synchronization — detecting true conflicts, auto-merging safe changes, and never silently overwriting data.
-
-## Architecture Overview
+Instead of relying on wall-clock timestamps (which drift between devices), each document carries a **vector clock** — a map of `{deviceId: counter}` that tracks how many changes each device has made. This lets the server determine whether two changes are sequential (one happened after the other) or truly concurrent (neither knew about the other).
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    Client Device A                        │
-│  data: {title: "From A", status: "draft"}                │
-│  baseClock: {A:1}, baseVersion: 1                        │
-└────────────────────────┬─────────────────────────────────┘
-                         │ POST /api/v1/sync
-                         ▼
-┌──────────────────────────────────────────────────────────┐
-│                  Sync Engine (Server)                     │
-│                                                          │
-│  1. Validate request (fields, mutation ID)                │
-│  2. Check mutation cache (idempotency)                    │
-│  3. Acquire per-document mutex lock                       │
-│  4. Compare Vector Clocks:                                │
-│     ┌─ AFTER  → Fast-forward accept                      │
-│     ├─ EQUAL  → Fast-forward accept                      │
-│     ├─ BEFORE → Reject as stale                          │
-│     └─ CONCURRENT → 3-way field merge                    │
-│  5. Three-Way Field-Level Merge:                          │
-│     ┌─ Find common ancestor revision                     │
-│     ├─ Compare each field: ancestor vs current vs incoming│
-│     ├─ Auto-merge non-conflicting fields                 │
-│     └─ Flag true conflicts (same field, different values) │
-│  6. Conflict Resolution:                                  │
-│     ├─ Auto-merged → ACCEPTED                            │
-│     ├─ LWW requested → Apply last-write-wins             │
-│     └─ Manual → Return 409 with 3-way diff               │
-│  7. Update Vector Clock, increment version                │
-│  8. Store revision in history, release lock               │
-└──────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌──────────────────────────────────────────────────────────┐
-│                    Client Device B                        │
-│  data: {title: "Hello", status: "published"}             │
-│  baseClock: {A:1}, baseVersion: 1                        │
-└──────────────────────────────────────────────────────────┘
+Device A:  {A: 1}  →  {A: 2}
+Device B:  {A: 1, B: 1}   ← concurrent with A:2
 ```
 
-## Core Concepts
+When the server compares `{A: 2}` with `{A: 1, B: 1}`, it sees that A is ahead on its own counter but behind on B's — that's a concurrent modification.
 
-### Vector Clocks
-Each document maintains a vector clock `{deviceA: 3, deviceB: 1}` that tracks how many mutations each device has contributed. This enables precise causal ordering without relying on system timestamps (which are unreliable across devices).
+### Three-way field-level merge
 
-| Comparison | Meaning |
-|-----------|---------|
-| `BEFORE` | Incoming change happened before server state |
-| `AFTER` | Incoming change is a direct successor (fast-forward) |
-| `EQUAL` | Same state, no-op |
-| `CONCURRENT` | Independent branches — requires merge |
+When concurrent changes are detected, the engine doesn't just pick one. It finds the **common ancestor** (the version both devices started from) and compares each field individually:
 
-### Three-Way Field-Level Merge
-When concurrent changes are detected, the engine finds the **common ancestor** revision and performs per-field comparison:
+- If only Device A changed `title` and only Device B changed `status`, both changes are merged automatically. No conflict.
+- If both devices changed `title` to different values, that's a true conflict. The server can either apply Last-Write-Wins (if the client requests it) or return the conflict details for manual resolution.
 
-| Ancestor | Server (Current) | Incoming | Result |
-|----------|-----------------|----------|--------|
-| "Hello" | "Hello" | "Updated" | ✅ Auto-merge incoming |
-| "Hello" | "Changed" | "Hello" | ✅ Keep current |
-| "Hello" | "Changed" | "Changed" | ✅ Same change, no conflict |
-| "Hello" | "Value A" | "Value B" | ⚠️ True conflict |
+This is the same approach git uses for merge commits, but applied to JSON document fields.
 
-### Conflict Resolution Strategies
-1. **Auto-Merge** (default): Non-conflicting field changes are merged automatically
-2. **Last-Write-Wins (LWW)**: Client requests `conflictResolution: "lww"` to force incoming values
-3. **Manual Resolution**: Server returns `409` with full 3-way diff for client-side resolution
+### Idempotent mutations
 
-## API Reference
+Network retries are common on flaky connections. If a device sends a sync request, loses connection during the response, and retries the same request, the server recognizes the duplicate `mutationId` and returns the cached result instead of applying the change twice.
 
-### Documents
+## Tech stack
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/documents` | List all documents |
-| `POST` | `/api/v1/documents` | Create a new document |
-| `GET` | `/api/v1/documents/:id` | Get document by ID |
-| `DELETE` | `/api/v1/documents/:id` | Soft-delete (tombstone) |
+- **Node.js + Express** — straightforward HTTP server. Express handles routing, CORS, and JSON parsing. The API is RESTful with proper HTTP status codes (200 for success, 409 for conflicts, 400 for invalid input).
 
-### Synchronization
+- **TypeScript** — the sync logic involves complex state transitions (ACCEPTED → AUTO_MERGED → CONFLICT_REQUIRES_RESOLUTION). TypeScript's union types make it impossible to accidentally return an invalid status or forget to handle a case.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/sync` | Submit a device change for sync |
+- **TSX** for development — runs TypeScript directly without a compile step, with file watching for hot reload.
 
-**Sync Request Body:**
-```json
-{
-  "documentId": "uuid",
-  "deviceId": "device-phone",
-  "deviceName": "Pixel 9",
-  "mutationId": "unique-uuid-per-mutation",
-  "baseVersion": 1,
-  "baseClock": {"device-phone": 1},
-  "data": {"title": "Updated Title", "status": "published"},
-  "conflictResolution": "lww"
-}
-```
+- **Vitest** for testing — 38 tests covering vector clock math, three-way merge logic, and full sync integration scenarios including race conditions with 10 concurrent devices.
 
-**Possible Sync Statuses:**
-| Status | HTTP | Meaning |
-|--------|------|---------|
-| `ACCEPTED` | 200 | Direct fast-forward update accepted |
-| `AUTO_MERGED` | 200 | Concurrent but non-conflicting, auto-merged |
-| `CONFLICT_RESOLVED_LWW` | 200 | Conflict resolved via Last-Write-Wins |
-| `CONFLICT_REQUIRES_RESOLUTION` | 409 | True conflict, client must resolve |
-| `REJECTED_STALE` | 409 | Update too far behind, fetch latest first |
-| `REJECTED_INVALID` | 400 | Missing/invalid fields |
-| `DUPLICATE_MUTATION` | 200 | Idempotent replay of cached mutation |
+- **In-memory storage** — documents are stored in a Map with per-document mutex locks. This is deliberate — the task is about sync algorithms, not database integration. The locking mechanism prevents race conditions when multiple sync requests arrive for the same document simultaneously.
 
-### Version History & Time Travel
+- **Swagger UI** at `/docs` — auto-generated from an OpenAPI 3.0 spec embedded in the server. You can test every endpoint directly from the browser.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/documents/:id/history` | List all revisions |
-| `GET` | `/api/v1/documents/:id/revisions/:v` | Inspect snapshot at version v |
-| `POST` | `/api/v1/documents/:id/restore/:v` | Rollback to version v |
+## API overview
 
-## Edge Cases Handled
+| Endpoint | What it does |
+|----------|-------------|
+| `POST /api/v1/documents` | Create a new document |
+| `GET /api/v1/documents` | List all documents |
+| `GET /api/v1/documents/:id` | Get a single document |
+| `DELETE /api/v1/documents/:id` | Soft-delete (tombstone) |
+| `POST /api/v1/sync` | Submit a change from a device |
+| `GET /api/v1/documents/:id/history` | Version history |
+| `GET /api/v1/documents/:id/revisions/:v` | Inspect a specific version |
+| `POST /api/v1/documents/:id/restore/:v` | Rollback to a previous version |
 
-- **Race conditions**: Per-document atomic mutex locks prevent concurrent corruption
-- **Out-of-order delivery**: Vector clock comparison detects causal ordering regardless of arrival time
-- **Duplicate mutations**: 24-hour mutation ID cache ensures idempotent replays
-- **Stale updates**: Changes from far-behind versions are rejected with clear error messages
-- **Tombstone propagation**: Soft-deleted documents reject further syncs without resurrection
-- **Rapid concurrent syncs**: 10+ simultaneous device syncs resolve deterministically
+### Sync response statuses
 
-## Interactive Simulator
+The sync endpoint returns one of these statuses so the client knows exactly what happened:
 
-Navigate to `/simulator` to access the **Multi-Device Visual Simulator**:
+- **ACCEPTED** — direct update, no conflicts
+- **AUTO_MERGED** — concurrent changes on different fields, merged cleanly
+- **CONFLICT_RESOLVED_LWW** — conflict existed, resolved by Last-Write-Wins
+- **CONFLICT_REQUIRES_RESOLUTION** — true conflict, client needs to decide
+- **REJECTED_STALE** — device is too far behind, needs to fetch latest first
+- **DUPLICATE_MUTATION** — idempotent replay of a previous request
 
-1. Create a document with custom JSON fields
-2. Two simulated devices appear: **Phone** and **Laptop**
-3. Toggle devices **Offline/Online**
-4. Edit different fields on each device
-5. Hit **Sync** and watch the event log show ACCEPTED, AUTO_MERGED, or CONFLICT results
-6. Inspect Vector Clock advancement in real-time
+## Interactive simulator
 
-## Test Suite
+Navigate to `/simulator` to test sync scenarios visually. It simulates two devices (Phone and Laptop) editing the same document. You can:
 
-```bash
-npm test
-```
+1. Create a document with custom fields
+2. Toggle each device offline/online
+3. Edit different fields on each device
+4. Hit "Sync" and watch the event log show what happened
+5. See vector clocks advance in real time
+
+This is useful for understanding how the engine handles different conflict scenarios.
+
+## Project structure
 
 ```
-✓ tests/vector-clock.test.ts (14 tests)
-✓ tests/merger.test.ts       (11 tests)
-✓ tests/sync.test.ts         (13 tests)
+src/
+├── core/
+│   ├── vector-clock.ts     -- clock creation, increment, merge, causal comparison
+│   └── merger.ts           -- 3-way field-level merge + LWW fallback
+├── store/
+│   └── document-store.ts   -- document CRUD, sync logic, mutex locks, mutation cache
+├── api/
+│   └── routes.ts           -- Express routes
+├── simulator/
+│   └── index.html          -- interactive multi-device testing UI
+└── server.ts               -- Express setup, Swagger, health check
 
-Test Files  3 passed (3)
-     Tests  38 passed (38)
+tests/
+├── vector-clock.test.ts    -- 14 tests
+├── merger.test.ts          -- 11 tests
+└── sync.test.ts            -- 13 tests (including 10-device race condition)
 ```
 
-**Test coverage includes:**
-- Vector clock creation, increment, merge, all 4 causal orderings
-- 3-way merge: no-change, auto-merge, true conflict, mixed, field addition/deletion
-- Sync: fast-forward, auto-merge, conflict (manual + LWW), stale rejection, idempotency, concurrent races, history tracking, time travel, rollback
+## Running locally
 
-## Getting Started
-
-```bash
+```
 git clone https://github.com/srivris1/offline-sync-engine.git
 cd offline-sync-engine
 npm install
 npm run dev
 ```
 
-Server starts at `http://localhost:3001`
+Server starts at `http://localhost:3001`. API docs at `/docs`, simulator at `/simulator`.
 
-| URL | Description |
-|-----|-------------|
-| `http://localhost:3001` | API root with endpoint listing |
-| `http://localhost:3001/docs` | Swagger UI (interactive API docs) |
-| `http://localhost:3001/simulator` | Multi-device visual simulator |
-| `http://localhost:3001/api/health` | Health check |
+## Running tests
 
-## Tech Stack
+```
+npm test
+```
 
-| Layer | Technology |
-|-------|-----------|
-| Runtime | Node.js 22 |
-| Language | TypeScript 5.7 |
-| Framework | Express 4.21 |
-| Causality | Vector Clocks |
-| Merge | 3-Way Field-Level Semantic Merge |
-| Testing | Vitest |
-| API Docs | Swagger UI + OpenAPI 3.0 |
-| Deployment | Vercel Serverless |
-
-## Design Decisions
-
-**Why Vector Clocks over timestamps?**
-System clocks across devices can drift by seconds or minutes. A phone in airplane mode has no NTP sync. Vector Clocks track logical causality — "did this change know about that change?" — without any timestamp dependency.
-
-**Why 3-way merge instead of Last-Write-Wins?**
-LWW silently discards valid data. If Device A changes `title` and Device B changes `status`, LWW would pick one device's entire payload and lose the other's. 3-way merge preserves both changes by comparing field-by-field against their common ancestor.
-
-**Why per-document mutex locks?**
-Without locks, two concurrent sync requests for the same document could read-then-write in interleaved order, corrupting state. The mutex ensures serial processing per document while allowing parallel processing across different documents.
-
-**Why a mutation ID cache?**
-Network retries are common on flaky connections. If a device sends a sync request, loses connection during the response, and retries, the server recognizes the duplicate `mutationId` and returns the cached result — preventing double-application of the same change.
+All 38 tests should pass in under 2 seconds.
